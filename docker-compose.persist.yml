@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  postgres:
+    volumes:
+      - ./var/postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql  # Presumed to be static and not requiring persistence
+
+  airflow-db-init:
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./var/airflow/logs:/opt/airflow/logs
+      - ./var/airflow/config:/opt/airflow/config  # New volume for additional configuration
+
+  airflow-webserver:
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./var/airflow/logs:/opt/airflow/logs
+      - ./var/airflow/config:/opt/airflow/config  # Ensure webserver configuration persistence
+
+  airflow-scheduler:
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./var/airflow/logs:/opt/airflow/logs
+      - ./var/airflow/config:/opt/airflow/config
+
+  mlflow:
+    volumes:
+      - ./var/mlflow_data:/mlflow  # Persist MLflow artifacts and tracking data
+
+  grafana:
+    volumes:
+      - ./var/grafana_data:/var/lib/grafana  # Grafana data persistence for dashboards, etc.
+
+volumes:
+  postgres_data:
+  airflow_data:
+  mlflow_data:
+  grafana_data:

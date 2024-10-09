@@ -1,0 +1,164 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - project_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
+
+  airflow-db-init:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      - AIRFLOW__CORE__EXECUTOR=${AIRFLOW__CORE__EXECUTOR}
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}
+      - AIRFLOW_ADMIN_USERNAME=${AIRFLOW_ADMIN_USERNAME}
+      - AIRFLOW_ADMIN_PASSWORD=${AIRFLOW_ADMIN_PASSWORD}
+      - AIRFLOW_ADMIN_EMAIL=${AIRFLOW_ADMIN_EMAIL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow users create --username ${AIRFLOW_ADMIN_USERNAME} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}
+      "
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    networks:
+      - project_network
+    healthcheck:
+      test: ["CMD", "airflow", "db", "check"]
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      timeout: 5s
+
+  airflow-webserver:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      - AIRFLOW__CORE__EXECUTOR=${AIRFLOW__CORE__EXECUTOR}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-db-init:
+        condition: service_completed_successfully
+    command: webserver
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    networks:
+      - project_network
+
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      - AIRFLOW__CORE__EXECUTOR=${AIRFLOW__CORE__EXECUTOR}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-db-init:
+        condition: service_completed_successfully
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    networks:
+      - project_network
+
+  spark-master:
+    image: bitnami/spark:latest
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8081:8081"
+    networks:
+      - project_network
+
+  spark-worker:
+    image: bitnami/spark:latest
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    depends_on:
+      - spark-master
+    networks:
+      - project_network
+
+  mlflow:
+    build: ./mlflow
+    ports:
+      - "5000:5000"
+    networks:
+      - project_network
+    environment:
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
+      - MLFLOW_ARTIFACT_ROOT=${MLFLOW_ARTIFACT_ROOT}
+
+  zookeeper:
+    image: wurstmeister/zookeeper:latest
+    ports:
+      - "2181:2181"
+    networks:
+      - project_network
+
+  kafka:
+    image: wurstmeister/kafka:latest
+    ports:
+      - "9092:9092"
+    networks:
+      - project_network
+    environment:
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092
+    depends_on:
+      - zookeeper
+
+  prometheus:
+    build: ./prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - project_network
+
+  grafana:
+    build: ./grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - project_network
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+
+volumes:
+  postgres_data:
+    driver: local
+    
+networks:
+  project_network:
+    driver: bridge
